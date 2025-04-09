@@ -59,26 +59,26 @@ async def test_calculator(session: ClientSession) -> None:
         print(f"计算器工具调用出错: {e}")
 
 
-async def test_filesystem(session: ClientSession) -> None:
-    """测试文件系统资源。"""
-    print("\n=== 测试文件系统资源 ===")
+# async def test_filesystem(session: ClientSession) -> None:
+#     """测试文件系统资源。"""
+#     print("\n=== 测试文件系统资源 ===")
     
-    try:
-        # 列出当前目录内容
-        result = await session.read_resource("dir://.")
-        print("当前目录内容:")
-        if hasattr(result, 'contents') and result.contents:
-            for content in result.contents:
-                if hasattr(content, 'text'):
-                    try:
-                        data = json.loads(content.text)
-                        print(data.get("content", "无内容"))
-                    except json.JSONDecodeError:
-                        print(content.text)
-        else:
-            print("无法读取目录内容")
-    except Exception as e:
-        print(f"文件系统资源访问出错: {e}")
+#     try:
+#         # 列出当前目录内容
+#         result = await session.read_resource("dir://.")
+#         print("当前目录内容:")
+#         if hasattr(result, 'contents') and result.contents:
+#             for content in result.contents:
+#                 if hasattr(content, 'text'):
+#                     try:
+#                         data = json.loads(content.text)
+#                         print(data.get("content", "无内容"))
+#                     except json.JSONDecodeError:
+#                         print(content.text)
+#         else:
+#             print("无法读取目录内容")
+#     except Exception as e:
+#         print(f"文件系统资源访问出错: {e}")
 
 
 async def test_prompts(session: ClientSession) -> None:
@@ -133,7 +133,7 @@ async def main(server_url: str):
                 
                 # 运行测试
                 await test_calculator(session)
-                await test_filesystem(session)
+                # await test_filesystem(session)
                 await test_prompts(session)
 
     except Exception as e:

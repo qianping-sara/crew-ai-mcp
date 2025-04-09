@@ -22,7 +22,7 @@ source .venv/bin/activate  # Linux/macOS
 
 2. 安装依赖：
 ```bash
-pip install -r requirements.txt
+pip3 install -r requirements.txt
 ```
 
 ## 使用方法
@@ -30,7 +30,7 @@ pip install -r requirements.txt
 运行客户端：
 
 ```bash
-python demo_client.py <server_url>
+python3 demo_client.py http://127.0.0.1:8000/sse
 ```
 
 例如：

@@ -58,14 +58,14 @@ source .venv/bin/activate  # Linux/macOS
 
 3. 安装依赖
 ```bash
-pip install -r requirements.txt
+pip3 install -r requirements.txt
 ```
 
 ### 使用方法
 
 1. 直接运行服务器
 ```bash
-python -m src.main
+python3 -m src.main
 ```
 
 2. 与 Claude Desktop 集成
