@@ -13,6 +13,7 @@ from typing import Dict, Any, Optional, List, Union, AsyncGenerator
 import aiohttp
 import logging
 from urllib.parse import urlparse
+import os
 
 # 日志配置
 logging.basicConfig(
@@ -27,7 +28,7 @@ class StreamableHttpClient:
     def __init__(
         self, 
         server_url: str, 
-        use_streaming: bool = True,
+        use_streaming: bool = False,
         client_info: Dict[str, str] = None
     ):
         """
@@ -40,8 +41,10 @@ class StreamableHttpClient:
         """
         self.server_url = server_url
         self.use_streaming = use_streaming
-        self.session_id: Optional[str] = None
-        self.http_session: Optional[aiohttp.ClientSession] = None
+        self.session_id = None
+        self.request_id = 0
+        self.session = None
+        self.timeout = aiohttp.ClientTimeout(total=120)  # 增加超时时间到120秒
         self.client_info = client_info or {
             "name": "mcp-streamable-http-client", 
             "version": "1.0.0"
@@ -50,27 +53,34 @@ class StreamableHttpClient:
         
     async def __aenter__(self):
         """异步上下文管理器入口"""
-        self.http_session = aiohttp.ClientSession()
+        self.session = aiohttp.ClientSession()
         return self
         
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         """异步上下文管理器退出"""
-        if self.http_session:
-            await self.http_session.close()
+        if self.session:
+            await self.session.close()
     
     async def initialize(self) -> Dict[str, Any]:
         """初始化MCP会话"""
-        if self.http_session is None:
+        if self.session is None:
             # 创建更接近浏览器行为的连接器
-            tcp_connector = aiohttp.TCPConnector(
-                ssl=False,  # 禁用SSL验证
-                force_close=False,  # 允许连接复用
-                limit=10,  # 限制连接数
-                ttl_dns_cache=300  # DNS缓存时间
-            )
+            connector_options = {
+                "ssl": False,  # 禁用SSL验证
+                "force_close": False,
+                "enable_cleanup_closed": True
+            }
             
-            self.http_session = aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=60),  # 增加超时时间到60秒
+            # 添加代理支持
+            proxy = os.environ.get("HTTP_PROXY")
+            if proxy:
+                logger.info(f"使用代理: {proxy}")
+                connector_options["proxy"] = proxy
+                
+            tcp_connector = aiohttp.TCPConnector(**connector_options)
+            
+            self.session = aiohttp.ClientSession(
+                timeout=self.timeout,
                 connector=tcp_connector
             )
             
@@ -106,11 +116,11 @@ class StreamableHttpClient:
             logger.info(f"请求头: {headers}")
             logger.info(f"请求体: {json.dumps(request_data)}")
             
-            async with self.http_session.post(
+            async with self.session.post(
                 self.server_url, 
                 json=request_data,
                 headers=headers,
-                timeout=aiohttp.ClientTimeout(total=60)  # 明确指定此请求的超时
+                timeout=self.timeout  # 明确指定此请求的超时
             ) as response:
                 # 检查响应状态
                 if response.status != 200:
@@ -118,7 +128,7 @@ class StreamableHttpClient:
                     raise Exception(f"初始化失败: HTTP {response.status} - {error_text}")
                 
                 # 获取会话ID
-                self.session_id = response.headers.get("mcp-session-id")
+                self.session_id = response.headers.get("Mcp-Session-Id") or response.headers.get("mcp-session-id")
                 logger.info(f"响应头: {dict(response.headers)}")
                 
                 if not self.session_id:
@@ -220,136 +230,118 @@ class StreamableHttpClient:
             logger.error(f"解析SSE流时出错: {e}")
             raise
     
-    async def send_request(self, method: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """发送MCP请求并获取响应"""
-        if not self.session_id:
+    async def send_request(self, method: str, params: Dict[str, Any] = None, retries: int = 3) -> Dict[str, Any]:
+        """发送请求到MCP服务器
+        
+        Args:
+            method: 请求方法
+            params: 请求参数
+            retries: 重试次数
+        
+        Returns:
+            响应数据
+        """
+        if method != "initialize" and not self.session_id:
             raise Exception("会话未初始化，请先调用initialize()")
             
-        if self.http_session is None:
+        if self.session is None:
             raise Exception("HTTP会话已关闭")
             
         # 准备请求数据
-        request_id = str(hash(f"{method}_{params}_{asyncio.get_event_loop().time()}") % 1000000)
+        self.request_id = str(hash(f"{method}_{params}_{asyncio.get_event_loop().time()}") % 1000000)
         request_data = {
             "jsonrpc": "2.0",
             "method": method,
             "params": params or {},
-            "id": request_id
+            "id": self.request_id
         }
         
-        logger.info(f"发送请求: {method}, ID={request_id}")
+        logger.info(f"发送请求: {method}, ID={self.request_id}")
         
         # 准备请求头
         headers = {
             "Content-Type": "application/json",
             "Accept": "application/json",
-            "mcp-session-id": self.session_id,
             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36",
             "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
             "Connection": "keep-alive",
-            "Cache-Control": "no-cache",
+            "Cache-Control": "no-cache", 
             "Pragma": "no-cache"
         }
         
+        # 添加会话ID (如果已初始化)
+        if self.session_id:
+            headers["Mcp-Session-Id"] = self.session_id
+            logger.debug(f"使用会话ID: {self.session_id}")
+        
         if self.use_streaming:
-            headers["Accept"] = "text/event-stream"
-            
-        # 发送请求
-        try:
-            # 使用重试机制
-            retries = 3
+            # 流式响应模式
+            logger.info("使用流式响应模式")
+            raise NotImplementedError("流式响应模式尚未实现")
+        else:
+            # JSON响应模式
+            # 这里使用重试机制来处理临时网络问题
             for attempt in range(1, retries + 1):
                 try:
                     logger.info(f"尝试 {attempt}/{retries}...")
-                    async with self.http_session.post(
+                    async with self.session.post(
                         self.server_url,
                         json=request_data,
                         headers=headers,
-                        timeout=aiohttp.ClientTimeout(total=60)
+                        timeout=self.timeout
                     ) as response:
                         # 检查响应状态
                         if response.status != 200:
                             error_text = await response.text()
-                            raise Exception(f"请求失败: HTTP {response.status} - {error_text}")
+                            logger.error(f"HTTP错误 {response.status}: {error_text}")
+                            raise Exception(f"HTTP错误 {response.status}: {error_text}")
                         
-                        content_type = response.headers.get('content-type', '未知')
-                        logger.info(f"收到响应: 状态={response.status}, Content-Type={content_type}")
+                        # 获取并处理响应数据
+                        logger.debug(f"收到响应: HTTP {response.status}")
                         
-                        # 处理响应
-                        if content_type.startswith("text/event-stream"):
-                            # 流式响应处理
-                            logger.info("处理流式响应...")
-                            event_received = False
-                            async for event in self._parse_sse_stream(response):
-                                event_received = True
-                                logger.info(f"收到SSE事件: {json.dumps(event)[:100]}...")
-                                if "result" in event:
-                                    return event
-                                elif "error" in event:
-                                    raise Exception(f"MCP错误: {event['error']}")
+                        # 检查并更新会话ID
+                        if "Mcp-Session-Id" in response.headers or "mcp-session-id" in response.headers:
+                            new_session_id = response.headers.get("Mcp-Session-Id") or response.headers.get("mcp-session-id")
+                            if not self.session_id:
+                                self.session_id = new_session_id
+                                logger.info(f"会话ID已设置: {self.session_id}")
+                            elif self.session_id != new_session_id:
+                                logger.warning(f"会话ID已更改: {self.session_id} -> {new_session_id}")
+                                self.session_id = new_session_id
+                        
+                        # 解析JSON响应
+                        try:
+                            json_response = await response.json()
+                            logger.debug(f"响应数据: {json.dumps(json_response)[:200]}...")
                             
-                            if not event_received:
-                                if attempt < retries:
-                                    wait_time = 2 ** attempt
-                                    logger.warning(f"未收到任何事件，{wait_time}秒后重试...")
-                                    await asyncio.sleep(wait_time)
-                                    continue
-                                else:
-                                    raise Exception("流式响应未返回任何事件")
-                        else:
-                            # JSON响应处理
-                            try:
-                                result = await response.text()
-                                logger.info(f"收到JSON响应: {result[:200]}...")
-                                if not result.strip():
-                                    raise Exception("服务器返回了空响应")
-                                
-                                result_obj = json.loads(result)
-                                if "error" in result_obj:
-                                    raise Exception(f"MCP错误: {result_obj['error']}")
-                                return result_obj
-                            except aiohttp.ContentTypeError as e:
-                                # 处理Content-Type不是application/json的情况
-                                text = await response.text()
-                                logger.warning(f"响应Content-Type不是JSON: {content_type}")
-                                if text.strip():
-                                    logger.info(f"尝试手动解析响应内容: {text[:200]}...")
-                                    try:
-                                        # 尝试手动解析JSON
-                                        result = json.loads(text)
-                                        return result
-                                    except json.JSONDecodeError:
-                                        logger.error(f"响应不是有效的JSON: {text}")
-                                        if attempt < retries:
-                                            wait_time = 2 ** attempt
-                                            logger.warning(f"解析失败，{wait_time}秒后重试...")
-                                            await asyncio.sleep(wait_time)
-                                            continue
-                                        # 如果无法解析，则抛出原始错误
-                                        raise Exception(f"响应不是有效的JSON格式: {str(e)}")
-                                else:
-                                    logger.error("服务器返回了空响应内容")
-                                    if attempt < retries:
-                                        wait_time = 2 ** attempt
-                                        logger.warning(f"收到空响应，{wait_time}秒后重试...")
-                                        await asyncio.sleep(wait_time)
-                                        continue
-                                    raise Exception("服务器返回了空响应")
-                    
-                    # 如果执行到这里，说明请求成功，跳出重试循环
-                    break
-                    
-                except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
-                    if attempt < retries:
-                        wait_time = 2 ** attempt
-                        logger.warning(f"连接错误: {e}, {wait_time}秒后重试...")
-                        await asyncio.sleep(wait_time)
-                    else:
-                        logger.error(f"连接失败，已重试{retries}次: {e}")
-                        raise Exception(f"连接到服务器失败: {str(e)}")
-        except Exception as e:
-            logger.error(f"请求 {method} 时出错: {str(e)}")
-            raise
+                            # 检查错误
+                            if "error" in json_response:
+                                error = json_response["error"]
+                                logger.error(f"RPC错误: {error}")
+                                raise Exception(f"RPC错误: {error}")
+                            
+                            return json_response
+                        except json.JSONDecodeError:
+                            text = await response.text()
+                            logger.error(f"无效的JSON响应: {text[:200]}...")
+                            raise Exception(f"无效的JSON响应: {text[:200]}...")
+                            
+                except asyncio.TimeoutError:
+                    logger.error(f"请求超时（尝试 {attempt}/{retries}）")
+                    if attempt == retries:
+                        raise Exception(f"请求多次超时，已放弃")
+                except aiohttp.ClientError as e:
+                    logger.error(f"HTTP客户端错误: {e}")
+                    if attempt == retries:
+                        raise Exception(f"HTTP客户端错误: {e}")
+                
+                # 如果需要重试，添加延迟
+                if attempt < retries:
+                    delay = 1 * attempt  # 递增延迟
+                    logger.info(f"等待 {delay} 秒后重试...")
+                    await asyncio.sleep(delay)
+            
+            raise Exception("所有请求尝试均失败")
     
     async def list_tools(self) -> List[Dict[str, str]]:
         """获取可用工具列表"""
@@ -414,30 +406,6 @@ async def test_calculator(client: StreamableHttpClient) -> None:
     except Exception as e:
         print(f"计算器工具调用出错: {e}")
 
-
-if __name__ == "__main__":
-    try:
-        # 默认使用JSON响应模式而非流式响应
-        parser = argparse.ArgumentParser(description="MCP StreamableHTTP 客户端示例")
-        parser.add_argument("server_url", help="MCP服务器URL (例如: http://localhost:3000/mcp)")
-        parser.add_argument("--stream", action="store_true", help="使用流式响应模式而非JSON响应")
-        args = parser.parse_args()
-        
-        # 验证URL格式
-        if not urlparse(args.server_url).scheme in ("http", "https"):
-            print("错误: 服务器URL必须以 http:// 或 https:// 开头")
-            sys.exit(1)
-            
-        print(f"连接到: {args.server_url} (使用{'流式' if args.stream else 'JSON'}响应模式)")
-        
-        # 创建客户端，默认使用JSON模式
-        asyncio.run(main_with_args(args.server_url, use_streaming=args.stream))
-    except KeyboardInterrupt:
-        print("\n已退出")
-    except Exception as e:
-        print(f"未处理的错误: {e}")
-        sys.exit(1)
-
 async def main_with_args(server_url: str, use_streaming: bool = False) -> None:
     """带参数的主函数"""
     try:
@@ -451,19 +419,75 @@ async def main_with_args(server_url: str, use_streaming: bool = False) -> None:
             try:
                 result = await client.initialize()
                 print(f"初始化成功: {json.dumps(result)[:200]}...")
+                
+                # 列出所有可用功能
+                print("\n=== 可用功能 ===")
+                try:
+                    tools = await client.list_tools()
+                    await print_items("工具", tools)
+                except Exception as e:
+                    print(f"获取工具列表失败: {e}")
+                
+                try:
+                    resources = await client.list_resources()
+                    await print_items("资源", resources)
+                except Exception as e:
+                    print(f"获取资源列表失败: {e}")
+                
+                try:
+                    prompts = await client.list_prompts()
+                    await print_items("提示模板", prompts)
+                except Exception as e:
+                    print(f"获取提示模板列表失败: {e}")
+                
+                # 测试工具
+                try:
+                    await test_calculator(client)
+                except Exception as e:
+                    print(f"测试计算器工具失败: {e}")
             except Exception as e:
                 print(f"初始化失败: {e}")
                 raise
-                
-            # 列出所有可用功能
-            print("\n=== 可用功能 ===")
-            await print_items("工具", await client.list_tools())
-            await print_items("资源", await client.list_resources())
-            await print_items("提示模板", await client.list_prompts())
-            
-            # 测试工具
-            await test_calculator(client)
     
     except Exception as e:
         print(f"错误: {e}")
         raise 
+
+if __name__ == "__main__":
+    try:
+        # 设置更详细的日志级别
+        logging.basicConfig(
+            level=logging.DEBUG,
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        )
+        
+        # 启用HTTP客户端调试
+        aiohttp_logger = logging.getLogger('aiohttp')
+        aiohttp_logger.setLevel(logging.DEBUG)
+        
+        # 默认使用JSON响应模式而非流式响应
+        parser = argparse.ArgumentParser(description="MCP StreamableHTTP 客户端示例")
+        parser.add_argument("server_url", help="MCP服务器URL (例如: http://localhost:3000/mcp)")
+        parser.add_argument("--stream", action="store_true", help="使用流式响应模式而非JSON响应")
+        parser.add_argument("--proxy", help="HTTP代理地址 (例如: http://127.0.0.1:7890)")
+        args = parser.parse_args()
+        
+        # 验证URL格式
+        if not urlparse(args.server_url).scheme in ("http", "https"):
+            print("错误: 服务器URL必须以 http:// 或 https:// 开头")
+            sys.exit(1)
+            
+        print(f"连接到: {args.server_url} (使用{'流式' if args.stream else 'JSON'}响应模式)")
+        if args.proxy:
+            print(f"使用代理: {args.proxy}")
+            # 设置全局代理环境变量
+            os.environ["HTTP_PROXY"] = args.proxy
+            os.environ["HTTPS_PROXY"] = args.proxy
+            
+        # 创建客户端，默认使用JSON模式
+        asyncio.run(main_with_args(args.server_url, use_streaming=args.stream))
+    except KeyboardInterrupt:
+        print("\n已退出")
+    except Exception as e:
+        print(f"未处理的错误: {e}")
+        sys.exit(1) 
