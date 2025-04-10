@@ -1,1 +1,1 @@
-web: python -m src.main 
+web: python -m src.streamable_http_server_main 
