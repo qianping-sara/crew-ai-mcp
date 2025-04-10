@@ -1,0 +1,17 @@
+{
+  "name": "Crew AI MCP Server",
+  "description": "Model Context Protocol Server with StreamableHTTP support",
+  "repository": "https://github.com/yourusername/crew-ai-mcp",
+  "keywords": ["mcp", "ai", "api", "fastapi", "python"],
+  "env": {
+    "PYTHONPATH": {
+      "description": "Python path to ensure modules can be found",
+      "value": "."
+    }
+  },
+  "buildpacks": [
+    {
+      "url": "heroku/python"
+    }
+  ]
+} 

@@ -12,16 +12,17 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 # 导入MCP服务器实例
-from src.mcp_server import mcp
-
-# 导入所有资源模块
-from src.resources import filesystem
-
-# 导入所有工具模块
-from src.tools import calculator, user
-
-# 导入所有提示模块
-from src.prompts import code_review, git_helper, api_design
+try:
+    from src.mcp_server import mcp
+    from src.resources import filesystem
+    from src.tools import calculator, user
+    from src.prompts import code_review, git_helper, api_design
+except ImportError:
+    # 如果上面的导入失败，尝试相对导入(本地开发环境)
+    from .mcp_server import mcp
+    from .resources import filesystem
+    from .tools import calculator, user
+    from .prompts import code_review, git_helper, api_design
 
 # 日志配置
 logging.basicConfig(level=logging.INFO)
