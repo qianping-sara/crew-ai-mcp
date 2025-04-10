@@ -29,11 +29,14 @@ def main():
     parser = argparse.ArgumentParser(description="启动MCP服务器")
     parser.add_argument("--transport", default="sse", choices=["sse", "stdio"], 
                       help="指定传输协议: sse或stdio")
-    parser.add_argument("--port", type=int, default=int(os.environ.get("PORT", 8000)),
-                      help="服务器端口号 (默认: 从PORT环境变量获取或8000)")
     args = parser.parse_args()
 
-    print(f"启动 MCP {args.transport.upper()} 服务器在端口 {args.port}...")
+    # 从Heroku PORT环境变量获取端口
+    port = int(os.environ.get("PORT", 8000))
+    # 设置MCP_PORT环境变量，FastMCP库可能会使用这个变量
+    os.environ["MCP_PORT"] = str(port)
+    print(f"启动 MCP {args.transport.upper()} 服务器在端口 {port}...")
+    
     if args.transport == 'stdio':
         return mcp.run(transport='stdio')
     else:
@@ -44,7 +47,7 @@ def main():
         app = Starlette(routes=routes)
         
         # 将MCP应用挂载到Starlette应用上
-        return mcp.run(transport='sse', port=args.port, app=app)
+        return mcp.run(transport='sse', app=app)
 
 
 if __name__ == "__main__":
