@@ -16,6 +16,13 @@ from src.prompts import code_review, git_helper, api_design
 
 import os
 import argparse
+from starlette.applications import Starlette
+from starlette.routing import Route
+from starlette.responses import JSONResponse
+
+async def health_check(request):
+    """健康检查端点"""
+    return JSONResponse({"status": "ok", "service": "crew-ai-mcp"})
 
 def main():
     """启动MCP服务器"""
@@ -30,7 +37,14 @@ def main():
     if args.transport == 'stdio':
         return mcp.run(transport='stdio')
     else:
-        return mcp.run(transport='sse', port=args.port)
+        # 创建Starlette应用并添加路由
+        routes = [
+            Route('/health', health_check),
+        ]
+        app = Starlette(routes=routes)
+        
+        # 将MCP应用挂载到Starlette应用上
+        return mcp.run(transport='sse', port=args.port, app=app)
 
 
 if __name__ == "__main__":
