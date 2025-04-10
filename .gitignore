@@ -3,4 +3,5 @@ __pycache__/
 *.pyc
 .env
 .vercel
-.DS_Store 
+.DS_Store
+crew_ai_mcp.egg-info/ 

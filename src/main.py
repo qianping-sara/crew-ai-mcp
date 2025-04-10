@@ -19,9 +19,18 @@ import argparse
 
 def main():
     """启动MCP服务器"""
+    parser = argparse.ArgumentParser(description="启动MCP服务器")
+    parser.add_argument("--transport", default="sse", choices=["sse", "stdio"], 
+                      help="指定传输协议: sse或stdio")
+    parser.add_argument("--port", type=int, default=int(os.environ.get("PORT", 8000)),
+                      help="服务器端口号 (默认: 从PORT环境变量获取或8000)")
+    args = parser.parse_args()
 
-    print("启动 MCP SSE 服务器...")
-    return mcp.run(transport='sse')
+    print(f"启动 MCP {args.transport.upper()} 服务器在端口 {args.port}...")
+    if args.transport == 'stdio':
+        return mcp.run(transport='stdio')
+    else:
+        return mcp.run(transport='sse', port=args.port)
 
 
 if __name__ == "__main__":
