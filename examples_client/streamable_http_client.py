@@ -61,7 +61,9 @@ class StreamableHttpClient:
     async def initialize(self) -> Dict[str, Any]:
         """初始化MCP会话"""
         if self.http_session is None:
-            self.http_session = aiohttp.ClientSession()
+            self.http_session = aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=60)  # 增加超时时间到60秒
+            )
             
         # 准备初始化请求
         request_data = {
@@ -86,10 +88,12 @@ class StreamableHttpClient:
             
         # 发送初始化请求
         try:
+            logger.info(f"连接到服务器: {self.server_url}")
             async with self.http_session.post(
                 self.server_url, 
                 json=request_data,
-                headers=headers
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=60)  # 明确指定此请求的超时
             ) as response:
                 # 检查响应状态
                 if response.status != 200:
@@ -220,59 +224,97 @@ class StreamableHttpClient:
             
         # 发送请求
         try:
-            async with self.http_session.post(
-                self.server_url,
-                json=request_data,
-                headers=headers,
-                timeout=30  # 增加超时时间
-            ) as response:
-                # 检查响应状态
-                if response.status != 200:
-                    error_text = await response.text()
-                    raise Exception(f"请求失败: HTTP {response.status} - {error_text}")
-                
-                content_type = response.headers.get('content-type', '未知')
-                logger.info(f"收到响应: 状态={response.status}, Content-Type={content_type}")
-                
-                # 处理响应
-                if content_type.startswith("text/event-stream"):
-                    # 流式响应处理
-                    logger.info("处理流式响应...")
-                    event_received = False
-                    async for event in self._parse_sse_stream(response):
-                        event_received = True
-                        logger.info(f"收到SSE事件: {json.dumps(event)[:100]}...")
-                        if "result" in event:
-                            return event
-                        elif "error" in event:
-                            raise Exception(f"MCP错误: {event['error']}")
-                    
-                    if not event_received:
-                        raise Exception("流式响应未返回任何事件")
-                else:
-                    # JSON响应处理
-                    try:
-                        result = await response.json()
-                        if "error" in result:
-                            raise Exception(f"MCP错误: {result['error']}")
-                        return result
-                    except aiohttp.ContentTypeError as e:
-                        # 处理Content-Type不是application/json的情况
-                        text = await response.text()
-                        logger.warning(f"响应Content-Type不是JSON: {content_type}")
-                        if text.strip():
-                            logger.info(f"尝试手动解析响应内容: {text[:200]}...")
-                            try:
-                                # 尝试手动解析JSON
-                                result = json.loads(text)
-                                return result
-                            except json.JSONDecodeError:
-                                logger.error(f"响应不是有效的JSON: {text}")
-                                # 如果无法解析，则抛出原始错误
-                                raise Exception(f"响应不是有效的JSON格式: {str(e)}")
+            # 使用重试机制
+            retries = 3
+            for attempt in range(1, retries + 1):
+                try:
+                    logger.info(f"尝试 {attempt}/{retries}...")
+                    async with self.http_session.post(
+                        self.server_url,
+                        json=request_data,
+                        headers=headers,
+                        timeout=aiohttp.ClientTimeout(total=60)
+                    ) as response:
+                        # 检查响应状态
+                        if response.status != 200:
+                            error_text = await response.text()
+                            raise Exception(f"请求失败: HTTP {response.status} - {error_text}")
+                        
+                        content_type = response.headers.get('content-type', '未知')
+                        logger.info(f"收到响应: 状态={response.status}, Content-Type={content_type}")
+                        
+                        # 处理响应
+                        if content_type.startswith("text/event-stream"):
+                            # 流式响应处理
+                            logger.info("处理流式响应...")
+                            event_received = False
+                            async for event in self._parse_sse_stream(response):
+                                event_received = True
+                                logger.info(f"收到SSE事件: {json.dumps(event)[:100]}...")
+                                if "result" in event:
+                                    return event
+                                elif "error" in event:
+                                    raise Exception(f"MCP错误: {event['error']}")
+                            
+                            if not event_received:
+                                if attempt < retries:
+                                    wait_time = 2 ** attempt
+                                    logger.warning(f"未收到任何事件，{wait_time}秒后重试...")
+                                    await asyncio.sleep(wait_time)
+                                    continue
+                                else:
+                                    raise Exception("流式响应未返回任何事件")
                         else:
-                            logger.error("服务器返回了空响应内容")
-                            raise Exception("服务器返回了空响应")
+                            # JSON响应处理
+                            try:
+                                result = await response.text()
+                                logger.info(f"收到JSON响应: {result[:200]}...")
+                                if not result.strip():
+                                    raise Exception("服务器返回了空响应")
+                                
+                                result_obj = json.loads(result)
+                                if "error" in result_obj:
+                                    raise Exception(f"MCP错误: {result_obj['error']}")
+                                return result_obj
+                            except aiohttp.ContentTypeError as e:
+                                # 处理Content-Type不是application/json的情况
+                                text = await response.text()
+                                logger.warning(f"响应Content-Type不是JSON: {content_type}")
+                                if text.strip():
+                                    logger.info(f"尝试手动解析响应内容: {text[:200]}...")
+                                    try:
+                                        # 尝试手动解析JSON
+                                        result = json.loads(text)
+                                        return result
+                                    except json.JSONDecodeError:
+                                        logger.error(f"响应不是有效的JSON: {text}")
+                                        if attempt < retries:
+                                            wait_time = 2 ** attempt
+                                            logger.warning(f"解析失败，{wait_time}秒后重试...")
+                                            await asyncio.sleep(wait_time)
+                                            continue
+                                        # 如果无法解析，则抛出原始错误
+                                        raise Exception(f"响应不是有效的JSON格式: {str(e)}")
+                                else:
+                                    logger.error("服务器返回了空响应内容")
+                                    if attempt < retries:
+                                        wait_time = 2 ** attempt
+                                        logger.warning(f"收到空响应，{wait_time}秒后重试...")
+                                        await asyncio.sleep(wait_time)
+                                        continue
+                                    raise Exception("服务器返回了空响应")
+                    
+                    # 如果执行到这里，说明请求成功，跳出重试循环
+                    break
+                    
+                except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
+                    if attempt < retries:
+                        wait_time = 2 ** attempt
+                        logger.warning(f"连接错误: {e}, {wait_time}秒后重试...")
+                        await asyncio.sleep(wait_time)
+                    else:
+                        logger.error(f"连接失败，已重试{retries}次: {e}")
+                        raise Exception(f"连接到服务器失败: {str(e)}")
         except Exception as e:
             logger.error(f"请求 {method} 时出错: {str(e)}")
             raise

@@ -8,7 +8,8 @@ import uuid
 import logging
 import asyncio
 from fastapi import FastAPI, Request, Response, BackgroundTasks
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse, HTMLResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 # 导入MCP服务器实例
@@ -30,6 +31,15 @@ logger = logging.getLogger(__name__)
 
 # 创建FastAPI应用
 app = FastAPI(title="MCP StreamableHTTP Server")
+
+# 添加CORS中间件
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # 允许所有源
+    allow_credentials=True,
+    allow_methods=["*"],  # 允许所有方法
+    allow_headers=["*"],  # 允许所有头部
+)
 
 # 会话存储
 sessions: Dict[str, Dict[str, Any]] = {}
@@ -362,4 +372,75 @@ def get_response_mode(request: Request) -> str:
 @app.get("/health")
 async def health_check():
     """健康检查端点"""
-    return {"status": "ok", "service": "mcp-streamable-http-server"} 
+    return {"status": "ok", "service": "mcp-streamable-http-server"}
+
+# 添加根路径处理
+@app.get("/")
+async def root():
+    """根路径欢迎页面"""
+    html_content = """
+    <html>
+        <head>
+            <title>MCP StreamableHTTP 服务器</title>
+            <style>
+                body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+                h1 { color: #333; }
+                pre { background-color: #f5f5f5; padding: 10px; border-radius: 5px; }
+                code { font-family: monospace; }
+            </style>
+        </head>
+        <body>
+            <h1>MCP StreamableHTTP 服务器</h1>
+            <p>这是一个基于Model Context Protocol的服务器，提供工具、资源和提示模板功能。</p>
+            <h2>API 使用说明</h2>
+            <p>请使用POST方法访问 <code>/mcp</code> 端点，发送符合JSON-RPC 2.0格式的请求。</p>
+            <h3>初始化请求示例：</h3>
+            <pre>
+POST /mcp HTTP/1.1
+Content-Type: application/json
+Accept: application/json
+
+{
+  "jsonrpc": "2.0",
+  "method": "initialize",
+  "params": {
+    "capabilities": {},
+    "protocolVersion": "2025-03-26",
+    "clientInfo": {
+      "name": "test-client",
+      "version": "1.0.0"
+    }
+  },
+  "id": "1"
+}
+            </pre>
+            <p>更多信息请参考 <a href="https://github.com/modelcontextprotocol/typescript-sdk">MCP 文档</a></p>
+        </body>
+    </html>
+    """
+    return HTMLResponse(content=html_content)
+
+# 添加MCP GET方法支持
+@app.get("/mcp")
+async def mcp_get():
+    """MCP GET方法说明"""
+    return JSONResponse(
+        content={
+            "message": "MCP接口只接受POST请求",
+            "documentation": "请使用POST方法发送符合JSON-RPC 2.0格式的请求",
+            "example": {
+                "jsonrpc": "2.0",
+                "method": "initialize",
+                "params": {
+                    "capabilities": {},
+                    "protocolVersion": "2025-03-26",
+                    "clientInfo": {
+                        "name": "test-client",
+                        "version": "1.0.0"
+                    }
+                },
+                "id": "1"
+            }
+        },
+        headers={"Content-Type": "application/json"}
+    ) 
