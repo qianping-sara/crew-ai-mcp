@@ -16,6 +16,8 @@ from src.prompts import code_review, git_helper, api_design
 
 import os
 import uvicorn
+from uvicorn.config import Config
+from uvicorn.server import Server
 
 # 添加健康检查工具
 @mcp.tool()
@@ -32,8 +34,10 @@ def main():
     # 获取SSE应用程序
     app = mcp.sse_app()
     
-    # 直接使用uvicorn启动服务器，绑定到指定端口
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    # 使用Server类直接启动，避免使用uvicorn.run()
+    config = Config(app=app, host="0.0.0.0", port=port, log_level="info")
+    server = Server(config=config)
+    server.run()
 
 
 if __name__ == "__main__":
