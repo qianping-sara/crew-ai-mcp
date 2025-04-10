@@ -1,1 +1,1 @@
-web: python -m src.main --transport sse 
+web: python -m src.main 

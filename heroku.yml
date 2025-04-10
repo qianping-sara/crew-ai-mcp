@@ -2,4 +2,4 @@ build:
   python:
     web: requirements.txt
 run:
-  web: python -m src.main --transport sse 
+  web: python -m src.main 
