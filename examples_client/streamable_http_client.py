@@ -16,7 +16,7 @@ from urllib.parse import urlparse
 
 # 日志配置
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,  # 使用DEBUG级别记录更多信息
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
@@ -103,6 +103,9 @@ class StreamableHttpClient:
         # 发送初始化请求
         try:
             logger.info(f"连接到服务器: {self.server_url}")
+            logger.info(f"请求头: {headers}")
+            logger.info(f"请求体: {json.dumps(request_data)}")
+            
             async with self.http_session.post(
                 self.server_url, 
                 json=request_data,
@@ -116,52 +119,62 @@ class StreamableHttpClient:
                 
                 # 获取会话ID
                 self.session_id = response.headers.get("mcp-session-id")
+                logger.info(f"响应头: {dict(response.headers)}")
+                
                 if not self.session_id:
+                    logger.warning("服务器未返回会话ID")
                     raise Exception("服务器未返回会话ID")
                 
-                logger.info(f"已初始化MCP会话: {self.session_id}")
+                logger.info(f"已获取会话ID: {self.session_id}")
+                
+                content_type = response.headers.get("content-type", "未知")
+                logger.info(f"响应类型: {content_type}")
                 
                 # 处理响应
-                if self.use_streaming and response.headers.get("content-type", "").startswith("text/event-stream"):
+                if content_type.startswith("text/event-stream"):
                     # 流式响应处理
+                    logger.info("接收流式响应...")
+                    received_data = False
                     async for event in self._parse_sse_stream(response):
+                        received_data = True
+                        logger.info(f"收到SSE事件: {json.dumps(event)[:200]}...")
                         if "result" in event:
+                            logger.info("解析服务器信息")
                             if "serverInfo" in event["result"]:
                                 self.server_capabilities = event["result"].get("capabilities", {})
                                 logger.info(f"已连接到MCP服务器: {event['result']['serverInfo']}")
                                 return event["result"]
+                            return event["result"]
+                    
+                    if not received_data:
+                        raise Exception("流式响应中没有收到数据")
                 else:
                     # JSON响应处理
+                    logger.info("接收JSON响应...")
+                    raw_text = await response.text()
+                    logger.info(f"原始响应: {raw_text[:200]}...")
+                    
+                    if not raw_text.strip():
+                        raise Exception("服务器返回了空响应")
+                    
                     try:
-                        result = await response.json()
+                        # 尝试解析JSON
+                        result = json.loads(raw_text)
+                        logger.info(f"解析JSON成功: {json.dumps(result)[:200]}...")
+                        
                         if "result" in result:
                             if "serverInfo" in result["result"]:
                                 self.server_capabilities = result["result"].get("capabilities", {})
                                 logger.info(f"已连接到MCP服务器: {result['result']['serverInfo']}")
                                 return result["result"]
-                        if "error" in result:
+                            return result["result"]
+                        elif "error" in result:
                             raise Exception(f"MCP错误: {result['error']}")
+                        
                         return result
-                    except aiohttp.ContentTypeError as e:
-                        # 处理Content-Type不是application/json的情况
-                        text = await response.text()
-                        logger.warning(f"响应Content-Type不是JSON: {response.headers.get('content-type', '未知')}")
-                        if text.strip():
-                            logger.warning(f"响应内容: {text[:100]}...")
-                            try:
-                                # 尝试手动解析JSON
-                                result = json.loads(text)
-                                if "result" in result:
-                                    if "serverInfo" in result["result"]:
-                                        self.server_capabilities = result["result"].get("capabilities", {})
-                                        logger.info(f"已连接到MCP服务器: {result['result']['serverInfo']}")
-                                        return result["result"]
-                                return result
-                            except json.JSONDecodeError:
-                                # 如果无法解析，则抛出原始错误
-                                raise Exception(f"响应不是有效的JSON格式: {str(e)}")
-                        else:
-                            raise Exception("服务器返回了空响应")
+                    except json.JSONDecodeError as e:
+                        logger.error(f"无法解析JSON: {e}")
+                        raise Exception(f"无法解析服务器响应: {e} - {raw_text[:100]}")
         except Exception as e:
             logger.error(f"初始化时出错: {str(e)}")
             raise
@@ -402,27 +415,46 @@ async def test_calculator(client: StreamableHttpClient) -> None:
         print(f"计算器工具调用出错: {e}")
 
 
-async def main() -> None:
-    """主函数"""
-    parser = argparse.ArgumentParser(description="MCP StreamableHTTP 客户端示例")
-    parser.add_argument("server_url", help="MCP服务器URL (例如: http://localhost:3000/mcp)")
-    parser.add_argument("--json", action="store_true", help="使用JSON响应模式而非流式响应")
-    args = parser.parse_args()
-    
-    # 验证URL格式
-    if not urlparse(args.server_url).scheme in ("http", "https"):
-        print("错误: 服务器URL必须以 http:// 或 https:// 开头")
+if __name__ == "__main__":
+    try:
+        # 默认使用JSON响应模式而非流式响应
+        parser = argparse.ArgumentParser(description="MCP StreamableHTTP 客户端示例")
+        parser.add_argument("server_url", help="MCP服务器URL (例如: http://localhost:3000/mcp)")
+        parser.add_argument("--stream", action="store_true", help="使用流式响应模式而非JSON响应")
+        args = parser.parse_args()
+        
+        # 验证URL格式
+        if not urlparse(args.server_url).scheme in ("http", "https"):
+            print("错误: 服务器URL必须以 http:// 或 https:// 开头")
+            sys.exit(1)
+            
+        print(f"连接到: {args.server_url} (使用{'流式' if args.stream else 'JSON'}响应模式)")
+        
+        # 创建客户端，默认使用JSON模式
+        asyncio.run(main_with_args(args.server_url, use_streaming=args.stream))
+    except KeyboardInterrupt:
+        print("\n已退出")
+    except Exception as e:
+        print(f"未处理的错误: {e}")
         sys.exit(1)
-    
+
+async def main_with_args(server_url: str, use_streaming: bool = False) -> None:
+    """带参数的主函数"""
     try:
         # 创建客户端
         async with StreamableHttpClient(
-            server_url=args.server_url,
-            use_streaming=not args.json
+            server_url=server_url,
+            use_streaming=use_streaming
         ) as client:
+            print("客户端创建完成，开始初始化...")
             # 初始化会话
-            await client.initialize()
-            
+            try:
+                result = await client.initialize()
+                print(f"初始化成功: {json.dumps(result)[:200]}...")
+            except Exception as e:
+                print(f"初始化失败: {e}")
+                raise
+                
             # 列出所有可用功能
             print("\n=== 可用功能 ===")
             await print_items("工具", await client.list_tools())
@@ -434,14 +466,4 @@ async def main() -> None:
     
     except Exception as e:
         print(f"错误: {e}")
-        sys.exit(1)
-
-
-if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("\n已退出")
-    except Exception as e:
-        print(f"未处理的错误: {e}")
-        sys.exit(1) 
+        raise 
