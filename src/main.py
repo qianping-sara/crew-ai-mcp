@@ -15,6 +15,7 @@ from src.tools import calculator, user
 from src.prompts import code_review, git_helper, api_design
 
 import os
+import uvicorn
 
 # 添加健康检查工具
 @mcp.tool()
@@ -26,12 +27,13 @@ def main():
     """启动MCP服务器"""
     # 从Heroku PORT环境变量获取端口
     port = int(os.environ.get("PORT", 8000))
-    # 设置MCP_PORT环境变量，FastMCP库可能会使用这个变量
-    os.environ["MCP_PORT"] = str(port)
     print(f"启动 MCP SSE 服务器在端口 {port}...")
     
-    # 硬编码使用SSE传输方式
-    return mcp.run(transport='sse')
+    # 获取SSE应用程序
+    app = mcp.sse_app()
+    
+    # 直接使用uvicorn启动服务器，绑定到指定端口
+    uvicorn.run(app, host="0.0.0.0", port=port)
 
 
 if __name__ == "__main__":
