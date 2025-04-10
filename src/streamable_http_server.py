@@ -57,11 +57,33 @@ async def handle_mcp_request(request: Request, background_tasks: BackgroundTasks
     支持初始化请求和普通请求，支持JSON响应和流式响应
     """
     try:
+        # 记录请求头以便调试
+        headers = dict(request.headers.items())
+        user_agent = headers.get('user-agent', '未知')
+        content_type = headers.get('content-type', '未知')
+        accept = headers.get('accept', '未知')
+        logger.info(f"收到请求: UA={user_agent}, CT={content_type}, Accept={accept}")
+        
         # 获取会话ID和请求体
         session_id = request.headers.get("mcp-session-id")
-        body = await request.json()
         
-        logger.info(f"收到MCP请求: 会话ID={session_id}, 方法={get_method_from_body(body)}")
+        try:
+            body = await request.json()
+            logger.info(f"收到MCP请求: 会话ID={session_id}, 方法={get_method_from_body(body)}")
+        except Exception as e:
+            logger.error(f"解析请求体时出错: {str(e)}")
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "jsonrpc": "2.0",
+                    "error": {
+                        "code": -32700,
+                        "message": f"无效的JSON: {str(e)}"
+                    },
+                    "id": None
+                },
+                headers={"Content-Type": "application/json"}
+            )
         
         # 检查是否是初始化请求
         if not session_id and is_initialize_request(body):

@@ -48,7 +48,18 @@ async def test_heroku_connection(url: str, retries: int = 3, timeout: int = 30):
             async with aiohttp.ClientSession(timeout=timeout_obj) as session:
                 # 先发送GET请求，测试基本连接
                 logger.info("发送GET请求测试基本连接...")
-                async with session.get(url, allow_redirects=True) as response:
+                headers = {
+                    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36",
+                    "Accept": "application/json,text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+                    "Connection": "keep-alive"
+                }
+                
+                async with session.get(
+                    url,
+                    allow_redirects=True,
+                    headers=headers
+                ) as response:
                     logger.info(f"GET响应: HTTP {response.status}")
                     text = await response.text()
                     logger.info(f"响应内容: {text[:200]}...")
@@ -57,7 +68,12 @@ async def test_heroku_connection(url: str, retries: int = 3, timeout: int = 30):
                 logger.info("发送POST请求初始化MCP连接...")
                 headers = {
                     "Content-Type": "application/json",
-                    "Accept": "application/json"
+                    "Accept": "application/json",
+                    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36",
+                    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+                    "Connection": "keep-alive",
+                    "Cache-Control": "no-cache",
+                    "Pragma": "no-cache"
                 }
                 
                 async with session.post(

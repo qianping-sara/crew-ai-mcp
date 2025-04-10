@@ -61,8 +61,17 @@ class StreamableHttpClient:
     async def initialize(self) -> Dict[str, Any]:
         """初始化MCP会话"""
         if self.http_session is None:
+            # 创建更接近浏览器行为的连接器
+            tcp_connector = aiohttp.TCPConnector(
+                ssl=False,  # 禁用SSL验证
+                force_close=False,  # 允许连接复用
+                limit=10,  # 限制连接数
+                ttl_dns_cache=300  # DNS缓存时间
+            )
+            
             self.http_session = aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=60)  # 增加超时时间到60秒
+                timeout=aiohttp.ClientTimeout(total=60),  # 增加超时时间到60秒
+                connector=tcp_connector
             )
             
         # 准备初始化请求
@@ -77,10 +86,15 @@ class StreamableHttpClient:
             "id": "1"
         }
         
-        # 准备请求头
+        # 准备请求头 - 模拟浏览器请求
         headers = {
             "Content-Type": "application/json",
-            "Accept": "application/json"
+            "Accept": "application/json",
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36",
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+            "Connection": "keep-alive",
+            "Cache-Control": "no-cache",
+            "Pragma": "no-cache"
         }
         
         if self.use_streaming:
@@ -216,7 +230,12 @@ class StreamableHttpClient:
         headers = {
             "Content-Type": "application/json",
             "Accept": "application/json",
-            "mcp-session-id": self.session_id
+            "mcp-session-id": self.session_id,
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36",
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+            "Connection": "keep-alive",
+            "Cache-Control": "no-cache",
+            "Pragma": "no-cache"
         }
         
         if self.use_streaming:
