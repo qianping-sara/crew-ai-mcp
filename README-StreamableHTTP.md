@@ -71,4 +71,14 @@ StreamableHTTP实现特别适合在Serverless环境中部署：
 
 ## 自定义扩展
 
-要添加自定义工具、资源或提示模板，可以按照原有项目的模式在相应模块中添加，然后确保在`streamable_http_server.py`中导入这些模块。 
+要添加自定义工具、资源或提示模板，可以按照原有项目的模式在相应模块中添加，然后确保在`streamable_http_server.py`中导入这些模块。
+
+
+# 基本使用
+python robust_mcp_client.py https://crew-ai-mcp-b7cdf81f032f.herokuapp.com/mcp
+
+# 增加重试次数
+python robust_mcp_client.py --retries 5 https://crew-ai-mcp-b7cdf81f032f.herokuapp.com/mcp
+
+# 使用代理
+python robust_mcp_client.py --proxy http://your-proxy-server:port https://crew-ai-mcp-b7cdf81f032f.herokuapp.com/mcp
